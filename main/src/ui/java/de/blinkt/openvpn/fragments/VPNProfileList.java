@@ -41,7 +41,14 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.Collection;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
@@ -85,6 +92,13 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
     private ArrayAdapter<VpnProfile> mArrayadapter;
     private Intent mLastIntent;
     private VpnProfile defaultVPN;
+
+    // ===== 节点延迟探测(自添加) =====
+    private static final ConcurrentHashMap<String, String> sLatencyMap = new ConcurrentHashMap<>();
+    private static volatile long sLastProbeTime = 0;
+    private static final long PROBE_TTL_MS = 10 * 60 * 1000L;
+    private static volatile boolean sProbing = false;
+    private static ExecutorService sProbePool = null;
 
     @Override
     public void updateState(String state, String logmessage, final int localizedResId, ConnectionStatus level, Intent intent) {
@@ -282,6 +296,93 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
 
     }
 
+    // ===== 节点延迟探测: 后台并发 ping 全部节点,结果写入 sLatencyMap(自添加) =====
+    private void startLatencyProbe() {
+        final long now = System.currentTimeMillis();
+        if (sProbing) return;
+        if (now - sLastProbeTime < PROBE_TTL_MS) {
+            mArrayadapter.notifyDataSetChanged();
+            return;
+        }
+        if (getActivity() == null || mArrayadapter == null) return;
+        sProbing = true;
+        sLastProbeTime = now;
+        final List<VpnProfile> targets = new LinkedList<>();
+        for (int i = 0; i < mArrayadapter.getCount(); i++) {
+            VpnProfile p = mArrayadapter.getItem(i);
+            if (p != null) targets.add(p);
+        }
+        final int total = targets.size();
+        if (total == 0) {
+            sProbing = false;
+            return;
+        }
+        if (sProbePool == null || sProbePool.isShutdown()) {
+            sProbePool = Executors.newFixedThreadPool(12, r -> {
+                Thread t = new Thread(r, "latency-probe");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        final AtomicInteger done = new AtomicInteger(0);
+        for (final VpnProfile p : targets) {
+            sProbePool.execute(() -> {
+                final String addr = serverOf(p);
+                if (addr != null && !sLatencyMap.containsKey(addr)) {
+                    sLatencyMap.put(addr, pingHost(addr));
+                }
+                int d = done.incrementAndGet();
+                if (d % 5 == 0 || d >= total) {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(() -> {
+                            if (mArrayadapter != null) mArrayadapter.notifyDataSetChanged();
+                        });
+                    }
+                    if (d >= total) sProbing = false;
+                }
+            });
+        }
+    }
+
+    private static String serverOf(VpnProfile p) {
+        try {
+            if (p.mConnections != null && p.mConnections.length > 0
+                    && p.mConnections[0].mServerName != null
+                    && !p.mConnections[0].mServerName.isEmpty()) {
+                return p.mConnections[0].mServerName;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String pingHost(String host) {
+        Process proc = null;
+        try {
+            proc = Runtime.getRuntime().exec(new String[]{"/system/bin/ping", "-c", "2", "-W", "2", host});
+            if (!proc.waitFor(8, TimeUnit.SECONDS)) {
+                proc.destroy();
+                return "无响应";
+            }
+            BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+            String line;
+            java.util.regex.Pattern pat = java.util.regex.Pattern.compile("min/avg/max[^=]*= [\\d.]+/([\\d.]+)");
+            while ((line = br.readLine()) != null) {
+                java.util.regex.Matcher m = pat.matcher(line);
+                if (m.find()) {
+                    br.close();
+                    return Math.round(Double.parseDouble(m.group(1))) + "ms";
+                }
+            }
+            br.close();
+            return "无响应";
+        } catch (Throwable t) {
+            return "无响应";
+        } finally {
+            if (proc != null) proc.destroy();
+        }
+    }
+
     private void setListAdapter() {
         if (mArrayadapter == null) {
             mArrayadapter = new VPNArrayAdapter(getActivity(), R.layout.vpn_list_item, R.id.vpn_item_title);
@@ -305,6 +406,7 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
 
         setListAdapter(mArrayadapter);
         mArrayadapter.notifyDataSetChanged();
+        startLatencyProbe();
     }
 
     @Override
@@ -621,10 +723,18 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
                 subtitle.setVisibility(View.VISIBLE);
             } else {
                 subtitle.setText(warningText);
-                if (warningText.length() > 0)
+                if (warningText.length() > 0) {
                     subtitle.setVisibility(View.VISIBLE);
-                else
-                    subtitle.setVisibility(View.GONE);
+                } else {
+                    String addr = serverOf(profile);
+                    String lat = addr != null ? sLatencyMap.get(addr) : null;
+                    if (lat != null) {
+                        subtitle.setText("延迟 " + lat);
+                        subtitle.setVisibility(View.VISIBLE);
+                    } else {
+                        subtitle.setVisibility(View.GONE);
+                    }
+                }
             }
 
 

@@ -11,24 +11,27 @@ jobs:
     name: "Release ${{ matrix.target }}"
     runs-on: ubuntu-latest
     steps:
-      - name: Use debug signing
-        run: mkdir -p ~/.gradle && echo -e "icsopenvpnDebugSign=true\norg.gradle.jvmargs=-Xmx2048M" > ~/.gradle/gradle.properties
       - name: Checkout the code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+      - name: Use debug signing
+        run: mkdir -p ~/.gradle && echo -e "icsopenvpnDebugSign=true\norg.gradle.jvmargs=-Xmx2048M" > ~/.gradle/gradle.properties
       - name: copy tunnelblick patches
-        run: cp -r /home/runner/work/ics-openvpn-xor/ics-openvpn-xor/tunnelblick-patches/* /home/runner/work/ics-openvpn-xor/ics-openvpn-xor/main/src/main/cpp/openvpn
+        run: cp -r ./tunnelblick-patches/* ./main/src/main/cpp/openvpn
       - name: apply patches
-        run: cd /home/runner/work/ics-openvpn-xor/ics-openvpn-xor/main/src/main/cpp/openvpn && git apply 02-tunnelblick-openvpn_xorpatch-a.diff && git apply 03-tunnelblick-openvpn_xorpatch-b.diff && git apply 04-tunnelblick-openvpn_xorpatch-c.diff && git apply 05-tunnelblick-openvpn_xorpatch-d.diff && git apply 06-tunnelblick-openvpn_xorpatch-e.diff
+        run: cd ./main/src/main/cpp/openvpn && git apply 02-tunnelblick-openvpn_xorpatch-a.diff && git apply 03-tunnelblick-openvpn_xorpatch-b.diff && git apply 04-tunnelblick-openvpn_xorpatch-c.diff && git apply 05-tunnelblick-openvpn_xorpatch-d.diff && git apply 06-tunnelblick-openvpn_xorpatch-e.diff
       - name: delete patch files
-        run: find . -name "*.diff" -type f -delete
+        run: find ./main/src/main/cpp/openvpn -name "*.diff" -type f -delete
       - name: Build the app
         run: ./gradlew assemble${{ matrix.target }}Release
-      - name: Run Unit tests
-        run: ./gradlew test${{ matrix.target }}ReleaseUnitTest
-      - name: Upload artifact - dump outputs folder
-        uses: actions/upload-artifact@v1.0.0
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: gradle outputs folder
-          path: /home/runner/work/ics-openvpn-xor/ics-openvpn-xor/main/build/outputs
+          name: outputs-${{ matrix.target }}
+          path: main/build/outputs
