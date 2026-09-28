@@ -187,6 +187,7 @@ dependencies {
     dependencies.add("uiImplementation", "androidx.preference:preference-ktx:$preferenceVersion")
     dependencies.add("uiImplementation", "com.google.android.material:material:$materialVersion")
     dependencies.add("uiImplementation", "androidx.webkit:webkit:1.4.0")
+    dependencies.add("uiImplementation", "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     dependencies.add("uiImplementation", "androidx.lifecycle:lifecycle-viewmodel-ktx:2.4.1")
     dependencies.add("uiImplementation", "androidx.lifecycle:lifecycle-runtime-ktx:2.4.1")
     dependencies.add("uiImplementation","androidx.security:security-crypto:1.0.0")

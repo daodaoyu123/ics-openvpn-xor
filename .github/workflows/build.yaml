@@ -26,8 +26,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
-      - name: Use debug signing
-        run: mkdir -p ~/.gradle && echo -e "icsopenvpnDebugSign=true\norg.gradle.jvmargs=-Xmx2048M" > ~/.gradle/gradle.properties
+      - name: Use fixed signing key
+        run: |
+          mkdir -p ~/.gradle ~/.android
+          cp signing/debug.keystore ~/.android/debug.keystore
+          echo -e "icsopenvpnDebugSign=true\norg.gradle.jvmargs=-Xmx2048M" > ~/.gradle/gradle.properties
       - name: copy tunnelblick patches
         run: cp -r ./tunnelblick-patches/* ./main/src/main/cpp/openvpn
       - name: apply patches

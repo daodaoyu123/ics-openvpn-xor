@@ -23,6 +23,7 @@ import android.os.PersistableBundle;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.fragment.app.ListFragment;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import android.text.Html;
 import android.text.Html.ImageGetter;
@@ -38,12 +39,15 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -99,6 +103,7 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
     private static final long PROBE_TTL_MS = 10 * 60 * 1000L;
     private static volatile boolean sProbing = false;
     private static ExecutorService sProbePool = null;
+    private SwipeRefreshLayout mSwipeRefresh;
 
     @Override
     public void updateState(String state, String logmessage, final int localizedResId, ConnectionStatus level, Intent intent) {
@@ -292,7 +297,21 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
         if (fab_import != null)
             fab_import.setOnClickListener(this);
 
-        return v;
+        // ===== 下拉刷新: 手动重测全部节点延迟(自添加) =====
+        SwipeRefreshLayout srl = new SwipeRefreshLayout(getActivity());
+        srl.addView(v);
+        srl.setOnChildScrollUpCallback((parent, child) -> {
+            ListView lv = getListView();
+            return lv != null && lv.canScrollVertically(-1);
+        });
+        srl.setOnRefreshListener(() -> {
+            sLatencyMap.clear();
+            sLastProbeTime = 0;
+            sProbing = false;
+            startLatencyProbe();
+        });
+        mSwipeRefresh = srl;
+        return srl;
 
     }
 
@@ -333,12 +352,18 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
                 }
                 int d = done.incrementAndGet();
                 if (d % 5 == 0 || d >= total) {
+                    final boolean finished = (d >= total);
+                    if (finished) sProbing = false;
                     if (getActivity() != null) {
                         getActivity().runOnUiThread(() -> {
                             if (mArrayadapter != null) mArrayadapter.notifyDataSetChanged();
+                            if (finished) {
+                                // 全部测完: 按延迟排序 + 停止下拉刷新动画
+                                sortByLatency();
+                                if (mSwipeRefresh != null) mSwipeRefresh.setRefreshing(false);
+                            }
                         });
                     }
-                    if (d >= total) sProbing = false;
                 }
             });
         }
@@ -380,6 +405,39 @@ public class VPNProfileList extends ListFragment implements OnClickListener, Vpn
             return "无响应";
         } finally {
             if (proc != null) proc.destroy();
+        }
+    }
+
+    // ===== 按延迟排序: 延迟小的在前,无响应最后,未测次后(自添加) =====
+    private void sortByLatency() {
+        if (mArrayadapter == null || mArrayadapter.getCount() == 0) return;
+        try {
+            List<VpnProfile> list = new ArrayList<>();
+            for (int i = 0; i < mArrayadapter.getCount(); i++) {
+                VpnProfile p = mArrayadapter.getItem(i);
+                if (p != null) list.add(p);
+            }
+            Collections.sort(list, (a, b) -> {
+                long la = latencyRank(a), lb = latencyRank(b);
+                if (la != lb) return Long.compare(la, lb);
+                return a.getName().compareToIgnoreCase(b.getName());
+            });
+            mArrayadapter.clear();
+            mArrayadapter.addAll(list);
+            mArrayadapter.notifyDataSetChanged();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static long latencyRank(VpnProfile p) {
+        String addr = serverOf(p);
+        String lat = addr != null ? sLatencyMap.get(addr) : null;
+        if (lat == null) return 999998;            // 未测到
+        if ("无响应".equals(lat)) return 999999;    // 不通
+        try {
+            return Long.parseLong(lat.replace("ms", "").trim());
+        } catch (Exception e) {
+            return 999998;
         }
     }
 
