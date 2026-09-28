@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -38,3 +41,10 @@ jobs:
         with:
           name: outputs-${{ matrix.target }}
           path: main/build/outputs
+      - name: Release APK (Ui only)
+        if: matrix.target == 'Ui'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latency-v1
+          name: "ics-openvpn-xor 延迟版 (Latency Build)"
+          files: main/build/outputs/apk/ui/release/*.apk
